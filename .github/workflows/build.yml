@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']        # a version tag also creates a draft release
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # silences git's "default branch name" hint during checkout
+      - run: git config --global init.defaultBranch main
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libgl-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev
+
+      # Visual Studio is multi-config (--config below); single-config generators need the build type here
+      - run: cmake -B build ${{ runner.os != 'Windows' && '-DCMAKE_BUILD_TYPE=Release' || '' }}
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build -C Release --output-on-failure
+
+      # tar keeps the executable bit, which artifact zips drop
+      - name: Package
+        shell: bash
+        run: |
+          mkdir dist
+          case "$RUNNER_OS" in
+            Windows) cp build/Release/tm-map-password-reset.exe dist/ ;;
+            macOS)   tar -C build -czf dist/tm-map-password-reset-macOS.tar.gz tm-map-password-reset.app ;;
+            Linux)   tar -C build -czf dist/tm-map-password-reset-Linux.tar.gz tm-map-password-reset ;;
+          esac
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tm-map-password-reset-${{ runner.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read     # fetch this run's artifacts
+      contents: write   # create the release
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # gh is preinstalled; avoids actions/download-artifact and its Node deprecation warnings
+      - run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir dist
+      - name: Create draft release
+        run: gh release create "$GITHUB_REF_NAME" dist/*/* --repo "$GITHUB_REPOSITORY" --draft --title "$GITHUB_REF_NAME"

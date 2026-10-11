@@ -1,0 +1,11 @@
+build/
+*.tmp
+
+# maps: contain author account IDs and may be someone else's work
+*.Gbx
+*.gbx
+
+.vs/
+.vscode/
+.idea/
+.DS_Store
